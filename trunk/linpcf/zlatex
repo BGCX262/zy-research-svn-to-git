@@ -1,0 +1,19 @@
+#!/usr/bin/perl -w
+
+if (@ARGV==1){ 
+    $FileName = $ARGV[0];
+    $FileName =~ s/\.tex$//;
+    $TexFile = $FileName . ".tex";
+    $PsFile = $FileName . ".ps";
+    $DviFile = $FileName . ".dvi";
+    if (!-e $TexFile) {
+	die("File $TexFile not exist!\n");
+    }
+    system("latex $TexFile") && die("\nLatex failed!\n\n");
+    print("\nLatex succeeded! Converting DVI to PS ... ... \n\n");
+    system("dvips -o $PsFile $DviFile") && die("\ndvips failed!\n\n");;
+#    print("\nOutput written on $PsFile. Producing PDF ... \n");
+#    system("ps2pdf -sPAPERSIZE=a4 $PsFile") && die("\nps2pdf failed!\n\n");;
+}else{
+    print("Usage: zlatex <tex file>\n");
+}

@@ -1,0 +1,945 @@
+\documentclass[10pt,a4]{article}
+
+\pagestyle{plain}
+
+%% \setlength{\parskip}{0.3em}
+%% \setlength{\textwidth}{170mm}
+%% \setlength{\textheight}{240mm}
+%% \setlength{\headheight}{0mm}
+%% \setlength{\headsep}{0mm}
+%% \setlength{\topmargin}{0mm}
+%% \setlength{\oddsidemargin}{-5.4mm}
+%% \setlength{\evensidemargin}{-5.4mm}
+
+\usepackage{fullpage}
+\usepackage{amsmath,amssymb,stmaryrd,latexsym}
+\usepackage[bbgreekl]{mathbbol}
+\usepackage{graphicx}
+\usepackage{proof}
+\usepackage{url}
+\usepackage[T1]{fontenc}
+\usepackage{times}
+\usepackage{picinpar}
+\usepackage{ifthen}
+\usepackage{enumerate}
+
+\input{macros}
+
+\begin{document}
+
+\title{On program equivalence in linear contexts}
+\author{Yu Zhang}
+\date{Draft of~\today}
+
+\maketitle
+
+\section{Introduction}
+
+Contextual equivalence is an important concept in programming languages and can be used to 
+formalize and reason about many interesting properties of computing systems. 
+On the other side, linear logic (and its term correspondence often known as linear lambda-calculus) 
+has seen significant applications in computer science ever since its birth, 
+due to its native mechanism of describing restricted resources. 
+
+Introducing linearity also leads to novel observation over program equivalences. 
+In particular, if we consider a special sort of contexts where candidate programs must be used linearly 
+(we call these contexts ``linear contexts''), program equivalence w.r.t. these contexts should be a coarser  
+relation that the normal contextual equivalence, especially when non-determinism is present. 
+For instance, take the language of~\cite{jefferay}, where we have a primive $\choice$ for non-deterministic 
+choice (same as the external choice in CSP), and consider the following two functions:
+\[
+f_1 \defeq \cval(\lambda x \ldot \cval(0) \choice \cval(1)) ,
+\qquad
+f_2 \defeq \cval(\lambda x \ldot \cval(0)) \choice \cval(\lambda x \ldot \cval(1)).
+\]
+Existing techniques such as bisimulation~\cite{} or logical relations~\cite{} 
+do not capture these two functions. In fact, it is easy to show that these two functions are not 
+contextually equivalent, by considering, e.g., the context 
+\[
+\cbind{f}{[\,]}{} \cbind{x}{f (0)}{}\cbind{y}{f (0)}{\cval(x = y)}
+\]
+The context makes a double evaluation of the function by applying it to concrete arguments: 
+with the first function $f_1$, the two evaluation can return different values since the non-determinstic 
+choice is inside the function body; with the second function $f_2$, the non-deterministic choice is made 
+before both evaluations and computation inside the function is deterministic, so the two evaluation 
+always return the same value. 
+But if we consider only linear contexts, where the function will be evaluated no more than once, 
+then the two functions should be equivalent. However, no existing technique, at least in our knowledge, 
+can establish such an equivalence relation under linear contexts. 
+
+This paper is organized as follows: Section~\ref{sec:linpcf} defines briefly a linear version of PCF 
+with a dual type system, as well as its operational semantics. A labeled transition system for the 
+language is also presented and the notion of {\em trace equivalence} is defined. 
+In section~\ref{sec:lce} we introduce the notion of linear contextual equivalence and show that 
+trace equivalence in linear PCF conincides with linear contextual equivalence. 
+Section~\ref{sec:monad} extends the result to languages with non-deterministic/probabilistic 
+computations and section~\ref{sec:cslr} presents an application of our result in cryptographic proofs. 
+Section~\ref{sec:conclu} conludes the paper.
+
+\section{The linear PCF}
+\label{sec:linpcf}
+
+We start with a linear version of PCF: types are defined by 
+\[
+\tau, \tau', \ldots ::= \tnat \mid \tbool \mid \tau \product \tau' \mid \tau \otimes \tau' 
+\mid \tau \linto \tau' \mid \tau \to \tau' 
+\]
+%
+$\tau \product \tau'$ and $\tau \tensor \tau'$ are usual product and tensor product types respectively. 
+$\tau \linto \tau'$ is the type for linear functions. Following Plotkin~\cite{}, 
+we choose to make intuitionistic function types $\tau \to \tau'$ primitive rather than exponential 
+types. The choice makes our technical development simpler but does not affect the heart of the proof 
+--- one can easily replace it with $\bang$-types and adapt our technique to the new language.
+
+Terms of the linear PCF is defined by 
+\[
+\begin{array}{lrl@{\qquad}l}
+e, e', \ldots 
+& ::= & x & 
+\\ 
+& \mid & 0 \mid 1 \mid 2 \mid \ldots & \mbox{Integers}
+\\
+& \mid & \csucc \mid \cpred \mid \czero & \mbox{Integer operations}
+\\
+& \mid & \ctrue \mid \cfalse & \mbox{Booleans}
+\\
+& \mid & \cif{e_1}{e_2}{e_3} & \mbox{Conditional}
+\\ 
+& \mid & \cpair{e, e'} \mid \cproj_i(e) & \mbox{Usual products and projections}
+\\
+& \mid & e \otimes e' \mid \clet{x \otimes y}{e}{e'} & \mbox{Tensor products and projection}
+\\
+& \mid & \cfix_\tau& \mbox{Fix-point recursion}
+\\
+& \mid & \lambda x \ldot e \mid e \, e' & \mbox{Abstraction and application}
+%% \\
+%% & \mid & \cval(e) \mid \cbind{x}{e}{e'} & \mbox{Computational constructs}
+%% \\
+%% & \mid & e_1 \square e_2 & \mbox{Non-deterministic/probabilistic choice}
+\end{array}
+\]
+%
+We write $\PROG(\tau) = \set{e \mid \emptyset ; \emptyset \vdash e : \tau }$ 
+for the set of all closed programs of type $\tau$. 
+We write $\FV(e), \FLV(e), \FNV(e)$ for the sets of, respectively, free variables, 
+free linear varibales, and free non-linear variables in term $e$.
+
+We adopt the type system for dual intuitionistic linear logic~\cite{Barber}: typing judgements 
+are of the form $\Gamma; \Delta \vdash e : \tau$, where $\Gamma$ and $\Delta$ are typing environments 
+for, respectively, intuitionistic variables and linear variables. 
+It is assumed that the codomains of the non-linear and linear typing environments are disjoint.
+%
+Typing rules:
+\[
+\begin{array}{c}
+\begin{prooftree}
+x : \tau \in \Gamma
+\justifies 
+\Gamma ; \emptyset\vdash x : \tau 
+\end{prooftree}
+\qquad
+\begin{prooftree}
+x : \tau \not\in \Gamma
+\justifies 
+\Gamma ; x : \tau \vdash x : \tau 
+\end{prooftree}
+\qquad
+\begin{prooftree}
+\justifies 
+\Gamma ; \emptyset \vdash \czero : \tnat 
+\end{prooftree}
+\qquad
+\begin{prooftree}
+\justifies 
+\Gamma ; \emptyset \vdash \csucc : \tnat \linto \tnat
+\end{prooftree}
+\\[1.5em]
+\begin{prooftree}
+\justifies 
+\Gamma ; \emptyset \vdash \ctrue : \tbool
+\end{prooftree}
+\qquad
+\begin{prooftree}
+\justifies 
+\Gamma ; \emptyset \vdash \cfalse : \tbool
+\end{prooftree}
+\qquad 
+\begin{prooftree}
+\Gamma; \Delta \vdash e_1 : \tbool
+\quad 
+\Gamma; \Delta' \vdash e_2 : \tau
+\quad 
+\Gamma; \Delta' \vdash e_3 : \tau
+\justifies 
+\Gamma ; \Delta, \Delta' \vdash \cif{e_1}{e_2}{e_3} : \tau
+\end{prooftree}
+\\[1.5em]
+\begin{prooftree}
+\Gamma ; \Delta \vdash e_i : \tau_i \; (i = 1, 2)
+\justifies
+\Gamma ; \Delta \vdash \cpair{e_1, e_2} : \tau_1 \product \tau_2
+\end{prooftree}
+\qquad
+\begin{prooftree}
+\Gamma ; \Delta \vdash e : \tau_1 \product \tau_2
+\justifies
+\Gamma ; \Delta \vdash \cproj_i (e) : \tau_i \; (i = 1, 2)
+\end{prooftree}
+\\[1.5em]
+\begin{prooftree}
+\Gamma ; \Delta_i \vdash e_i : \tau_1 \; (i = 1, 2)
+\justifies
+\Gamma ; \Delta_1, \Delta_2 \vdash e_1 \tensor e_2 : \tau_1 \tensor \tau_2
+\end{prooftree}
+\qquad 
+\begin{prooftree}
+\Gamma ; \Delta, x : \tau_1, y : \tau_2 \vdash e : \tau 
+\quad
+\Gamma ; \Delta' \vdash e' : \tau_1 \tensor \tau_2 
+\justifies
+\Gamma ; \Delta, \Delta' \vdash \clet{x \tensor y}{e'}{e} : \tau 
+\end{prooftree}
+\\[1.5em]
+\begin{prooftree}
+\Gamma, x : \tau ; \Delta  \vdash e : \tau'
+\justifies 
+\Gamma ; \Delta \vdash \lambda x \ldot e : \tau \to \tau'
+\end{prooftree}
+\qquad 
+\begin{prooftree}
+\Gamma ; \Delta  \vdash e : \tau' \to \tau
+\quad 
+\Gamma ; \emptyset \vdash e' : \tau' 
+\justifies 
+\Gamma ; \Delta \vdash e \, e'  : \tau'
+\end{prooftree}
+\\[1.5em]
+\begin{prooftree}
+\Gamma ; \Delta , x : \tau \vdash e : \tau'
+\justifies 
+\Gamma ; \Delta \vdash \lambda x \ldot e : \tau \linto \tau'
+\end{prooftree}
+\qquad 
+\begin{prooftree}
+\Gamma ; \Delta  \vdash e : \tau' \linto \tau
+\quad 
+\Gamma ; \Delta'\vdash e' : \tau' 
+\justifies 
+\Gamma ; \Delta, \Delta' \vdash e \, e'  : \tau'
+\end{prooftree}
+\qquad 
+\prooftree
+\justifies
+\Gamma ; \emptyset \vdash \cfix_\tau : \tau \to \tau
+\endprooftree
+%% \\[1.5em]
+%% \begin{prooftree}
+%% \Gamma ; \Delta \vdash e : \tau 
+%% \justifies 
+%% \Gamma ; \Delta \vdash \cval(e) : \tcomp \tau 
+%% \end{prooftree}
+%% \qquad 
+%% \begin{prooftree}
+%% \Gamma ; \Delta \vdash e_i : \tcomp \tau \; (i = 1, 2)
+%% \justifies
+%% \Gamma ; \Delta \vdash e_1 \choice e_2 : \tcomp \tau
+%% \end{prooftree}
+%% \qquad 
+%% \begin{prooftree}
+%% \Gamma ; \emptyset \vdash e_1 : \tcomp \tau_1  
+%% \quad 
+%% \Gamma, x: \tau_1 ; \Delta \vdash e_2 : \tcomp \tau_2
+%% \justifies 
+%% \Gamma ; \Delta \vdash \cbind{x}{e_1}{e_2} : \tcomp \tau_2
+%% \end{prooftree}
+%% \\[1.5em]
+%% \begin{prooftree}
+%% \Gamma ; \Delta \vdash e_1 : \tcomp \tau_1  
+%% \quad 
+%% \Gamma; \Delta' ,  x: \tau_1 \vdash e_2 : \tcomp \tau_2
+%% \justifies 
+%% \Gamma ; \Delta, \Delta' \vdash \cbind{x}{e_1}{e_2} : \tcomp \tau_2
+%% \end{prooftree}
+\end{array}
+\]
+
+\subsection{The operational semantics}
+
+The operational semantics for linear PCF is a one-step reduction relation $\reduce$ between terms. 
+It is indutively defined by the basic reductions
+\[
+\begin{array}{c}
+(\lambda x . e) e' \reduce e [ e' / x ], 
+\qquad
+\cfix_\tau \, e  \reduce e (\cfix_\tau \, e),
+\\
+\csucc \, n \reduce n+1 \; (n \in \set{0, 1, 2, \ldots}), 
+\qquad
+\cpred \, (n+1) \reduce n \; (n \in \set{0, 1, 2, \ldots}),
+\\
+\czero \, 0 \reduce \ctrue ,
+\qquad
+\czero \, n \reduce \cfalse \; (n \in \set{1, 2, \ldots}), 
+\\
+\cif{\ctrue}{e_1}{e_2} \reduce e_1 ,
+\qquad
+\cif{\cfalse}{e_1}{e_2} \reduce e_2
+\\
+\cproj_i \cpair{e_1, e_2} \reduce e_i \; (i = 1, 2),
+\qquad
+\clet{x \tensor y}{e_1 \tensor e_2}{e} \reduce e [e_1 / x, e_2 / y]
+%% \\
+%% \cbind{x}{\cval(e_1)}{e_2} \reduce e_2 [ e_1 / x ]
+%% \\
+%% \cbind{x}{e_1}{\cval(x)} \reduce e_1
+%% \\
+%% \cbind{x}{(\cbind{y}{e_1}{e_2})}{e_3} \reduce \cbind{y}{e_1}{}\cbind{x}{e_2}{e_3}, 
+%% \mbox{ if } y \not\in FV(e_3)
+%% \\
+%% \cbind{x}{e_1 \choice e_2}{e} \reduce 
+%% (\cbind{x}{e_1}{e}) \choice (\cbind{x}{e_2}{e})
+\end{array}
+\]
+together with the structural rules 
+\[
+\prooftree
+e_1 \reduce e_2
+\justifies 
+\evcontext[e_1] \reduce \evcontext[e_2]
+\endprooftree
+\]
+where $\evcontext$ is the evaluation context generated by the grammar
+\[
+\begin{array}{rl}
+\evcontext ::= & \hole \mid \csucc(\evcontext) \mid \cpred(\evcontext) \mid \czero(\evcontext) 
+\mid \evcontext \, e \mid \cif{\evcontext}{e_1}{e_2} \mid \cproj_i(\evcontext) 
+\mid \clet{x \tensor y}{\evcontext}{e} .
+%% \mid \cbind{x}{\evcontext}{e} \mid \evcontext \choice e \mid v \choice \evcontext
+\end{array}
+\]
+We often call a term $\evcontext[x]$ an evaluation context as well, where $x$ is a free variable.
+
+The operational semantics of linear PCF is a deterministic, call-by-name evaluation strategy. 
+As in Howe's approach~\cite{},  
+We write $e \not\reduce$ when there does not exist a term $e'$ such that $e \reduce e'$.
+
+\begin{lemma}
+For every well-typed term $e$, if $e \reduce e'$, then $\FLV(e') = \FLV(e)$.
+\end{lemma}
+
+The values of linear PCF have the canonical form:
+\[
+C ::= \csucc \mid \cpred \mid \czero \mid \ctrue \mid \cfalse \mid n \mid \cfix_\tau 
+\mid \cpair{e_1, e_2} \mid e_1 \tensor e_2 \mid \lambda x \ldot e 
+%% \mid \cval(e) \mid C \choice C
+\]
+It is clear that terms in canonical form cannot reduce. The following proposition also 
+shows that very closed non-reducible term must be in the canonical form.
+
+\begin{proposition}
+If $e$ is a closed term and $e \not\reduce$, then $e$ must be in the canonical form.
+\end{proposition}
+%
+\begin{proof}
+We prove by induction on the structure of $e$. Analysis for non-canonical forms:
+\begin{itemize}
+\item $e \equiv \cif{e'}{e_1}{e_2}$: $e'$ must be close and not reducible (otherwise the whole 
+  term can be reduced since $\cif{\hole}{e_1}{e_2}$ is an evaluation context). By induction 
+  $e'$ must be canonical, i.e., either $\ctrue$ or $\cfalse$, but in both cases, the original 
+  term can be reduced.
+\item $e \equiv \cproj_i(e')$: $e'$ must be close and not reducible (since $\cproj_i \hole$ is 
+  an evaluation context), and by induction, must be the canonical form $\cpair{e_1, e_2}$, 
+  which makes the original term reducible.
+\item $e \equiv \clet{x \tensor y}{e'}{e''}$: $e'$ must be close and not reducible, 
+  and by induction, must be the canonical form $e_1 \tensor e_2$, which makes the original 
+  term reducible.
+\item $e \equiv e' \, e''$: $e'$ must be close and not reducible, and by induction, must be 
+  canonical: if $e'$ is an abstraction or a fix-point, then the whole term can be reduced; 
+  if $e' \in \set{\csucc, \cpred, \czero}$, then $e''$ must be canonical, which will be an 
+  integer, hence the whole term can be reduced too.
+%% \item $e \equiv \cbind{x}{e'}{e''}$: $e'$ must be close and not reducible, and by induction, 
+%%   must be canonical, which can be either $\cval(\_)$ or $\_ \choice \_$. In both cases, 
+%%   the original term is reducible.
+%% \item $e \equiv e_1 \choice e_2$: apprently both $e_1$ and $e_2$ must be canonical, otherwise 
+%%   the term $e$ can be reduced.
+\end{itemize}
+\end{proof}
+
+%% It is easy to see that a canonical form of a computation type must be of the form 
+%% $\cval(e_1) \choice \cdots \choice \cval(e_n)$ ($n \geq 1$).
+
+\subsection{A labeled transition system}
+
+We follow Gordon~\cite{} to define a labelled transition system for the linear PCF. 
+As the type system plays an important role in linear PCF, we make the typing of terms 
+explicit in trasition rules:
+\[
+\begin{array}{c}
+\prooftree
+\ell \in \set{\ctrue, \cfalse, 0, 1, 2, \ldots}
+\justifies
+\ell \xrightarrow{\,\ell\,} \pmb{\Omega}
+\endprooftree
+\qquad 
+\prooftree
+\Gamma; \Delta \vdash \lambda x \ldot e : \tau' \to \tau
+\quad 
+\Gamma; \emptyset \vdash e' : \tau'
+\justifies
+\lambda x \ldot e \xrightarrow{@e'} e [e'  / x]
+\endprooftree
+\\[1.5em]
+\prooftree
+\Gamma; \Delta \vdash \lambda x \ldot e : \tau' \linto \tau
+\quad 
+\Gamma; \Delta' \vdash e' : \tau'
+\justifies
+\lambda x \ldot e \xrightarrow{@e'} e [e'  / x]
+\endprooftree
+\qquad
+\prooftree
+\Gamma; \Delta \vdash \cpair{e_1, e_2} : \tau_1 \product \tau_2
+\justifies
+\cpair{e_1, e_2} \xrightarrow{\cproj_i} e_i
+\endprooftree
+\\[1.5em]
+\prooftree
+\Gamma; \Delta \vdash e_1 \tensor e_2 : \tau_1 \tensor \tau_2
+\qquad 
+\Gamma; \Delta', x: \tau_1, y:\tau_2 \vdash e : \tau
+\justifies
+e_1 \tensor e_2 \xrightarrow{\tensor e} e [e_1 / x, e_2 / y]
+\endprooftree
+%% \\[1.5em]
+%% \prooftree
+%% \Gamma; \emptyset \vdash \cval(e) : \tcomp \tau 
+%% \quad
+%% \Gamma, x : \tau ; \Delta \vdash e' : \tcomp \tau'
+%% \justifies
+%% \cval(e) \transto{\tcomp \, e'} e'[e/x]
+%% \endprooftree
+%% \qquad
+%% \prooftree
+%% \Gamma; \emptyset \vdash e_i : \tcomp \tau \; (i = 1, 2)
+%% \quad 
+%% \Gamma, x: \tau; \Delta \vdash e : \tcomp \tau'
+%% \justifies
+%% e_1 \choice e_2 \transto{\choice e} 
+%% (\cbind{x}{e_1}{e}) \choice (\cbind{x}{e_2}{e})
+%% \endprooftree
+%% \\[1.5em]
+%% \prooftree
+%% \Gamma; \Delta \vdash \cval(e) : \tcomp \tau 
+%% \quad
+%% \Gamma; \Delta', x: \tau \vdash e' : \tcomp \tau'
+%% \justifies
+%% \cval(e) \transto{\tcomp \, e'} e'[e/x]
+%% \endprooftree
+%% \qquad
+%% \prooftree
+%% \Gamma; \Delta \vdash e_i : \tcomp \tau \; (i = 1, 2)
+%% \quad 
+%% \Gamma; \Delta', x: \tau \vdash e : \tcomp \tau'
+%% \justifies
+%% e_1 \choice e_2 \transto{\choice e} 
+%% (\cbind{x}{e_1}{e}) \choice (\cbind{x}{e_2}{e})
+%% \endprooftree
+\qquad
+\begin{prooftree}
+e \reduce e'' \qquad e'' \xrightarrow{\,\alpha\,} e'
+\justifies 
+e \xrightarrow{\,\alpha\,} e'
+\end{prooftree}
+\end{array}
+\]
+where $\pmb{\Omega} \defeq \cfix (\lambda x \ldot x)$. 
+
+The last rule says that term reductions are considered as internal transitions ---
+external transitions are labeled by {\em actions}. 
+Intuitively, external transitions represent the way terms interact with environments. 
+For instance, a $\lambda$-abstraction can ``eat'' (application of itself to) a term, 
+which is supplied by the environment as an argument, and forms a $\beta$-reduction.
+The first rule says that what 
+an integer or boolean constant can provide to the environment is the value of itself, 
+and after that it can no more provide any information, hence no external transitions 
+can occur any more and we represent this by a transition, labeled by the value of 
+the constant, into a non-terminating program $\pmb{\Omega}$. 
+
+Let $s$ be a finite sequence of actions $\alpha_1 \alpha_2 \cdots \alpha_n$ ($n \geq 1$). 
+We write $e \transto{s}$ if there exist terms $e_1, e_2, \ldots , e_n$ such that 
+$e \transto{\alpha_1} e_1 \transto{\alpha_2} e_2 \dots \transto{\alpha_n} e_n$. 
+An action sequence $s$ is {\em a trace of $e$} if $e \transto{s}$, and we write 
+$\trace(e)$ for the set of all traces of $e$, i.e., $\trace(e) \defeq \set{s \mid e \transto{s}}$.
+
+We define the {\em trace pre-order} $\preord^T$ relation between terms: $e_1 \preord_T e_2$ if 
+$\trace(e_1) \subseteq \trace(e_2)$. 
+We say two terms $e_1$ and $e_2$ are trace equivalent iff $e_1 \preord^T e_2$ and 
+$e_2 \preord^T e_1.$
+
+It is easy to see that if $e \reduce e'$, then $e' \preord^T e$.
+%% Some relations on closed terms:
+%% \begin{itemize}
+%% \item Contextual pre-order $\contpre$: $e_1 \contpre e_2$ if for all context
+%% $\context$ such that $\emptyset ; x : \tau \vdash \context : \tcomp \sigma$ holds,
+%% $\context[e_1/x] \Reduceto$ implies $\context[e_2/x] \Reduceto$.
+%% %
+%% %\item Contextual equivalence $\conteq$: $\conteq \defeq \contpre \cap \opcontpre$.
+%% %
+%% \item Trace pre-order $\preord^T$: $e_1 \preord^T e_2$ if $\trace(e_1) \subseteq \trace (e_2)$.
+%% %
+%% \item Simulation $\simul$: $e_1 \simul e_2$ implies that for all action $\alpha$, 
+%%   if $e_1 \xrightarrow {\, \alpha \,} e_1'$, then there exists $e_2'$ such that 
+%%   $e_2 \xrightarrow{\, \alpha \,} e_2'$.
+%%   We write $e_1 \opsimul e_2$ if $e_2 \simul e_1$.
+%% %
+%% \item Simulation equivalence $\simuleq \defeq \simul \cap \opsimul$.
+%% %
+%% \item Bisimulation $\bisimul$: $e_1 \bisimul e_2$ implies that for all action $\alpha$, 
+%% \begin{itemize}
+%% \item if $e_1 \transto \alpha e_1'$, then there exists $e_2'$ such that 
+%%   $e_2 \transto \alpha e_2'$;
+%% \item if $e_2 \transto \alpha e_2'$, then there exists $e_1'$ such that 
+%%   $e_1 \transto \alpha e_1'$.
+%% \end{itemize}
+%% \end{itemize}
+
+\section{Linear contextual equivalence}
+
+Defining a context in a language with linear types must be treated carefully~\cite{Bierman}, 
+since holes can hide bound variables and consequently breaks the typing if the variable is linear.
+We choose to replace the context hole by an explicit free variable and avoid extra syntactic 
+machinery.
+
+Intuitively, a linear context is a context where programs under testing will be evaluated and 
+used {\em exactly once}\footnote{It is more general to consider contexts where programs are 
+executes {\em at most} once, but clearly a context that does not execute the candidate program 
+is of little interest.}.
+In a linear functional language, we can formalize it by a restricted 
+notion of contexts which contain only one linear free variable and no non-linear variables:
+a {\em linear context} $\context_x$ in linear PCF is a program with a single linear variable $x$
+and no non-linear variables, i.e., 
+$\emptyset; x : \tau \vdash \context_x : \sigma$.
+We often omit the variable subscription when it is clear from the texts or irrelevant.
+
+\begin{definition}[Linear contextual equivalence]
+We write $e_1 \preord^C_\tau e_2$ for $e_1, e_2 \in \PROG(\tau)$, if 
+$\context[e_1 / x] \Reduceto$ implies $\context[e_2 / x] \Reduceto$ for all linear context $\context$ 
+such that $\emptyset; x : \tau \vdash \context : \sigma$.
+The relation $\preord^C$ is called the {\em linear contextual pre-order} between closed programs. 
+{\em Linear contextual equivalence $\simeq^C$} is defined as the symmetrization of $\preord^C$:
+$e_1 \simeq^C_\tau$ iff $e_1 \preord^C_\tau e_2$ and $e_2 \preord^C_\tau e_1$.
+\end{definition}
+
+Notice that in~\cite{BPR}, the definition of {\em ground contextual equivalence} says that 
+contexts must be of an exponential type, but we do not have exponential types. 
+
+\begin{lemma}
+Let $\context_1, \context_2$ be two linear contexts such that 
+$\emptyset; x: \tau \vdash \context_1 : \sigma$ and $ \emptyset; y : \sigma \vdash \context_2 : \sigma'$, 
+then $\context_2[\context_1 / y]$ is also a linear context.
+\end{lemma}
+
+Corresponding to the transition system for terms, we also define transitions for linear contexts:
+% , which we call {\em linear context transitions}:
+\[
+\begin{array}{c}
+\context[\cif{x}{e_1}{e_2}/y] \lintransto{\ctrue} \context[e_1 / y]
+\qquad 
+\context[\cif{x}{e_1}{e_2}/y] \lintransto{\cfalse} \context[e_2 / y]
+\\[0.2em]
+\context[\cpred(x)/y] \lintransto{n} \context[n'/y] \; (n = n' + 1  \mbox{ or } n = n' = 0)
+\qquad 
+\context[\csucc(x)/y] \lintransto{n} \context[n'/y] \; (n' = n + 1) 
+\\[0.2em]
+\context[\czero(x)/y] \lintransto{n} \context[\ctrue/y] \; (\mbox{if } n = 0) 
+\qquad 
+\context[\czero(x)/y] \lintransto{n} \context[\cfalse/y] \; (\mbox{if } n \neq 0) 
+\\[0.2em]
+\context[\cproj_i(x) / y] \lintransto{\cproj_i} \context_y \; (i = 1, 2)
+\qquad
+\context[x \, e / y] \lintransto{@e} \context_y 
+\qquad
+\context[\clet{z_1 \tensor z_2}{x}{e}/y] \lintransto{\tensor e} \context_y
+%% \\[0.2em]
+%% \context[\cbind{z}{x}{e}/y] \lintransto{\tcomp\,e} \context
+%% \qquad
+%% \context[\cbind{z}{x}{e}/y] \lintransto{\choice e} \context
+\end{array}
+\]
+%
+Linear context transitions represent the way a context interact with programs under testing.
+Note that the transition does not necessarily transform a linear context into another linear context ---
+linear contexts can also be transformed into closed terms, which do not contain any free varibales.
+A linear context transition can eliminate the free variable in the context or transform it into another 
+varaible of a different type (in which case we often rename the variable for the sake of clarity), 
+but it never introduces new free variables. In particular, in transitions of $@\,e$ and $\tensor\,e$, 
+the term $e$ is necessarily closed according to typing. 
+
+According to Lemma~\ref{lem:linvar}, when a linear context can reduce by itself, 
+the obtained program is still a linear context.
+%
+Reductions of linear contexts filled with programs can be classified into several forms, called 
+{\em linear context reductions}:
+%
+\begin{definition}[Linear context reduction]
+Let $\context$ be a linear context such that $\emptyset; x :\tau \vdash \context: \sigma$ holds and 
+$e$ be a closed program of type $\tau$. 
+A reduction of $\context[e / x]$ (if it is reducible) is called a {\em linear context reduction} 
+if it is either of the following forms: 
+\begin{itemize}
+\item $\context [e / x] \reduce \context' [e / x]$, if $\context \reduce \context'$;
+\item $\context [e / x] \reduce \context [e' / x]$, if $\context$ is an evaluation context, 
+  and $e \reduce e'$;
+\item $\context [e / x] \reduce \context' [e' / y]$, if $\context$ is an evaluation context,
+  $e \not \reduce$, and $\context_x \lintransto{\alpha} \context_y'$, $e \transto{\alpha} e'$ 
+  for some external action $\alpha$.
+\end{itemize}
+\end{definition}
+
+We shall introduce a so-called {\em linear context lemma}, which is the core of 
+proving precongruence of trace pre-order w.r.t. linear contexts. 
+The following two lemmas are useful for proving the linear context lemma.
+
+\begin{lemma}
+Let $\context_1, \context_2$ be two linear contexts such that 
+$\emptyset; x: \tau \vdash \context_1 : \sigma$ and $ \emptyset; y : \sigma \vdash \context_2 : \sigma'$.
+If $\context_1 \transto{\alpha} e$, then $\context_2[\context_1/y] \transto{\alpha} \context_2[e/y]$.
+\end{lemma}
+
+\begin{lemma}
+Let $\context_1, \context_2$ be two linear contexts such that 
+$\emptyset; x: \tau \vdash \context_1 : \sigma$ and $ \emptyset; y : \sigma \vdash \context_2 : \sigma'$, 
+and $\context_1$ also an evaluation context.
+If $\context_2[e/y] \reduce e'$ is a linear context reduction, 
+then $\context_1[\context_2[e/y]/x] \reduce \context_1[e'/x]$ is also a linear context reduction. 
+\end{lemma}
+
+\begin{lemma}[Linear context lemma]
+For every linear context $\context_\tau$ and every closed program $e \in \PROG(\tau)$, if 
+$\context[e / x]$ is reducible, then it must be a linear context reduction.
+\end{lemma}
+%
+\begin{proof}
+We prove by induction on the structure of the linear context. 
+
+\begin{itemize}
+\item $\context$ cannot be any constant since it must contain a linear free variable. And it cannot be 
+  a normal product, a tensor product, an abstraction or a trivial computation, as all these forms 
+  cannot be reduced any more, no matter what $e$ is.
+\item The simplest linear context $x$ is an evaluation context. If $e$ can be reduced, 
+  then it is the second case.
+\item $\context \equiv \cif{\context'}{e_1}{e_2}$: $\context'$ is another linear context.
+  If $\context'[e / x]$ can be reduced, by induction, it must be either of the following cases:
+  \begin{itemize}
+  \item $\context'[e / x] \reduce \context''[e / x]$ and $\context' \reduce \context''$,
+    then $\context[e/x] \reduce \cif{\context''[e/x]}{e_1}{e_2}$ with 
+    $\context \reduce \cif{\context''}{e_1}{e_2}$.
+  \item $\context'[e/x] \reduce \context'[e'/x]$, $e \reduce e'$, and $\context'$ is an evaluation context, 
+    then $\context$ is also an evaluation context, hence $\context[e/x] \reduce \context[e'/x]$.
+  \item $\context'[e/x] \reduce \context''[e'/x]$ and $\context' \transto{\alpha} \context''$, 
+    $e \transto{\alpha} e'$ for some action $\alpha$, then $\context \transto{\alpha} \cif{C''}{e_1}{e_2}$ 
+    and $\context[e / x]$ can take a similar reduction.
+  \end{itemize}
+  If $\context'[e / x]$ cannot reduce, then it is a canonical boolean term, which is either $\ctrue$ 
+  or $\cfalse$, 
+  and the only possibility of $\context'$ is the simplest case $x$, with $e$ being a boolear constant. 
+  In this case both $\context$ and $e$ can take the transition $\transto{\ctrue}$ or $\transto{\cfalse}$, 
+  and the reduction of $\context[e / x]$ falls into the third case.
+\item $\context \equiv \cif{e'}{\context_1}{\context_2}$: by typing, both $\context_1$ and $\context_2$ 
+  are linear contexts. If $e'$ can be reduced ($e' \reduce e''$), then $\context[e/x]$ will reduce to 
+  $\cif{e''}{\context_1[e/x]}{\context_2[e/x]}$, which is still a linear context. If $e'$ cannot be reduced, 
+  then it must be a boolean constant since it must be canonical, then $\context[e/x]$ will reduce to 
+  either $\context_1[e/x]$ or $\context_2[e/x]$.  Both reductions fit in the first case.
+\item $\context \equiv \cproj_i (\context')$: $\context'$ is a linear context. If $\context'[e/x]$ itself 
+  can be reudced, then by induction, it must one of the three forms of linear context reduction. 
+  In each case, it is easy to see that $\context[e/x]$ will take the same form of reduction. 
+  
+  If $\context'[e/x]$ is not reducible, then it must be of the form $\cpair{\_, \_}$. There are two cases 
+  \begin{itemize}
+  \item $\context' \equiv \cpair{\context_1', \context_2'}$, where both $\context_1'$ and $\context_2'$ 
+    are linear contexts, then $\context[e/x] \reduce \context_i[e/x]$, which is the second form of 
+    linear context reduction.
+  \item $\context' \equiv x$ and $e \equiv \cpair{e_1, e_2}$. Now both $\context$ and $e$ can take 
+    the transition $\transto{\cproj_i}$: $\context \equiv \cproj_i(x) \transto{\cproj_i} y$,
+    $e \equiv \cpair{e_1, e_2} \transto{\cproj_i} e_i$ and $\context[e/x] \reduce e_i = y[e_i/y]$. 
+    This is the third form of linear context reduction.
+  \end{itemize}
+\item $\context \equiv \clet{y_1 \tensor y_2}{\context'}{e'}$: 
+  if $\context'$ is reducible, by induction, the reduction of $\context'[e/x]$ must be a linear 
+  context reduction, then the reduction of $\context[e/x]$ will be a linear context reduction of 
+  the same form.
+  
+  If $\context'[e/x]$ is not reducible, then there are two cases:
+  \begin{itemize}
+  \item $\context' \equiv \context'' \tensor e''$ or $\context' \equiv e'' \tensor \context''$,
+    where $e''$ is a closed term and $\context''$ is a linear context. 
+    Consider the first case without losing generality. $\context[e/x]$ will reduce to 
+    $e'[\context''[e/x] / y_1, e'' / y_2]$. It is easy to check that $e'[e''/y_2]$ is also a linear context, 
+    then so is $e'[e''/y_2, \context'' / y_1]$, so the reduction is a linear context reduction of 
+    the first form.
+  \item $\context' \equiv x$ and $e \equiv e_1 \tensor e_2$. Now both $\context$ and $e$ can take a 
+    $\transto{\tensor e'}$ transition: 
+    $\context \equiv \clet{y_1 \tensor y_2}{x}{e'} \transto{\tensor e'} z$, 
+    $e \equiv e_1 \tensor e_2 \transto{\tensor e'} e'[e_1/y_1, e_2/y_2]$, and 
+    $\context[e/x] \reduce e'[e_1/y_1, e_2/y_2] = z [e'[e_1/y_1, e_2/y_2]/z]$.
+  \end{itemize}
+\item $\context \equiv \clet{y \tensor z}{e'}{\context'}$: 
+  it is clear that $e'$ is a closed term and $\FLV(\context') = \set{x, y, z}$.
+  If $e' \reduce e''$ reduces, then $\context[e/x] \reduce \clet{y \tensor z}{e''}{\context'[e/x]}$. 
+  Otherwise, $e'$ must be $e_1' \tensor e_2'$, then 
+  $\context[e/x] \reduce \context'[e/x, e_1'/y, e_2'/z]$, with $\context$ reducing to 
+  $\context'[e_1'/y, e_2'/z]$, which is a linear context.
+\item $\context \equiv \context' \, e'$: 
+  Because $\context'$ is a linear context, by induction, if $\context'[e/x]$ can be reduced, then 
+  it must be a linear context reduction. As $\context'\,e'$ is an evaluation context, $\context[e/x]$ 
+  will take the same form of linear context reduction as $\context'[e'/x]$.
+
+  If $\context'[e/x]$ cannot be reduced, then it must be an abstraction. There are two cases:
+  \begin{itemize}
+  \item  $\context' \equiv \lambda y \ldot \context''$ and $x \in \FLV(\context'')$, then 
+    $\context \equiv (\lambda y \ldot \context'')e' \reduce \context''[e'/y]$ and it is easy to check that 
+    $\context''[e'/y]$ is a linear context since $e'$ is closed, 
+    hence $\context[e/x] \equiv (\lambda y \ldot \context''[e/x]) e' \reduce \context''[e'/y][e/x]$, 
+    which is the first form of linear context reduction. 
+  \item $\context' \equiv x$ and $e \equiv \lambda y \ldot e''$ is an abstraction, then 
+    $\context \equiv x \, e' \transto{@e'} z$ ($z$ being a fresh linear variable, hence a linear context),
+    $e \equiv \lambda y \ldot e'' \transto{@e'} e''[e'/y]$, and 
+    $\context[e'/x] \equiv (\lambda y \ldot e'') e' \reduce e''[e'/y] \equiv z[e''[e'/y]/z]$.
+  \end{itemize}
+\item $\context \equiv e' \, \context'$:  
+  If $e' \reduce e''$, then $\context[e/x] \reduce e''(\context'[e/x])$ with 
+  $\context \reduce e'' \, \context'$.
+  If $e'$ cannot be reduced, then it must be canonical, which is either an abstraction or a constant. 
+  Because $\context'$ contains a linear variable, according to the typing system, the type of $e'$ 
+  can only be a linear function type. 
+  \begin{itemize}
+  \item If $e' \equiv \lambda y \ldot e''$, 
+    $\context[e/x] \equiv (\lambda y \ldot e'') (\context'[e/x]) \reduce e''[\context'[e/x] / y] 
+    = e''[\context'/y][e/x]$. Also $\context \reduce e''[\context'/y]$. 
+    Because $y$ is a free linear variable in $e''$, $e''$ is indeed a linear context, so is $e''[\context'/y]$.
+  \item If $e'$ is a constant, because its type must be a linear function type, so it can only be one 
+    of $\set{\cpred, \csucc, \czero}$. In any case, $e' \, \context'$ is an evaluation context. 
+    If $\context'[e/x]$ reduces, then by induction it must be a linear context reduction, hence 
+    $e' \, \context[e/x]$ can reduce and is a linear context reduction of the same form as of $\context'[e/x]$.
+    If $\context'[e/x]$ cannot reduce, it must be canonical, i.e., an integer $n$, then $\context' \equiv x$ 
+    and $e \equiv n$. Now both $\context$ and $e$ can take a $\transto{n}$ transition and 
+    $\context[e/x]$ will reduce to another integer or a boolean constant, depending on which constant 
+    $e'$ is.
+  \end{itemize}
+\item $\context \equiv \cbind{y}{\context'}{e'}$:
+  This is an evaluation context, so if $\context'[e/x]$ reduces, it must be a linear context reduction, 
+  then $\context[e/x]$ is a linear context reduction of the same form as $\context'[e/x]$.
+  If $\context'[e/x]$ does not reduce, which must be canonical and of the form 
+  $\context_1[e/x] \choice \cdots \choice \context_n[e/x]$, with each $\context_i$ being either 
+  $\cval(\context_i')$ (for some $\context_i'$ with free linear variable $x$) or $x$ itself. 
+  \begin{itemize}
+  \item If $n > 1$, then 
+    $\context[e/x] \reduce (\cbind{y}{\context_1[e/x]}{e'}) \choice 
+    (\cbind{y}{\context_2[e/x] \choice \cdots \choice \context_n[e/x]}{e'})$,
+    with $\context \reduce (\cbind{y}{\context_1}{e'}) \choice 
+    (\cbind{y}{\context_2 \choice \cdots \choice \context_n}{e'})$, which is a linear context.
+  \item If $n =1$, there are again two cases: 
+    \begin{itemize}
+    \item If $\context_1 \equiv \cval(\context_1')$, 
+      then $\context[e/x] \reduce e'[\context_1'[e/x]/y] = e'[\context_1'/y][e/x]$, with 
+      $\context \reduce e'[\context_1'/y]$. Since $\context_1'$ contains linear variables, according to the typing system, 
+      $y$ must be a linear variable in $e'$, hence $e'$ is a linear context, and so is $e'[\context_1'/y]$.
+    \item If $\context_1 \equiv x$ and $e \equiv \cval(e_1) \choice \cdots \choice \cval(e_m)$. If $m=1$, then both 
+      $\context$  and $e$ can take $\transto{\tcomp \, e'}$ transition: 
+      $\context \equiv \cbind{y}{x}{e'} \transto{\tcomp \, e'} z$, $e \equiv \cval(e_1) \transto{\tcomp \, e'} e'[e_1/y]$, 
+      and $\context[e/x] \equiv \cbind{y}{\cval(e_1)}{e'} \reduce e'[e_1/y] = z[e'[e_1/y]/z]$.
+      Similar for the case where $m > 1$.
+    \end{itemize}
+  \end{itemize}
+\item $\context \equiv \cbind{y}{e'}{\context'}$:
+  If $e' \reduce e''$, then $\context[e'x] \reduce \cbind{y}{e''}{\context'[e/x]}$ with
+  $\context \reduce \cbind{y}{e''}{\context'}$.
+  If $e'$ does not reduce, then it must be of the form $\cval(e_1) \choice \cdots \choice \cval(e_n)$. 
+  If $n > 1$, then 
+  \[
+  \context[e/x] \reduce (\cbind{y}{\cval(e_1)}{\context'[e/x]}) \choice 
+  (\cbind{y}{\cval(e_2) \choice \cdots \choice \cval(e_n)}{\context'[e/x]})
+  \]
+  with $\context[e/x] \reduce (\cbind{y}{\cval(e_1)}{\context'}) \choice 
+  (\cbind{y}{\cval(e_2) \choice \cdots \choice \cval(e_n)}{\context'})$.
+  If $n = 1$, then $\context[e/x] \reduce \context'[e/x][e_1/y] = \context'[e_1/y][e/x]$, 
+  with $\context[e/x] \reduce \context'[e_1/y]$, which is a linear context since $e_1$ is closed.
+\item $\context \equiv \context_1 \choice \context_2$:  
+  Clearly, both $\context_1$ and $\context_2$ are linear contexts. If $\context_1[e/x]$ reduces, then by induction 
+  it must be a linear context reduction, then the reduction of $\context[e/x]$ is a linear context reduction of the 
+  same form as $\context_1[e/x]$.
+  If $\context_1[e/x] \dot \reduce$, then $\context_1[e/x] \choice \context_2$ is an evaluation context, and 
+  $\context_2[e/x]$ necessarily reduces, and by induction, the reduction of $\context_2[e/x]$ is a linear context 
+  reduction, hence the reduction of $\context[e/x]$ is a linear context reduction of the same form as $\context_2[e/x]$.
+\end{itemize}
+\end{proof}
+
+\begin{lemma}[Linear context transition lemma]
+\label{lem:lc-trans}
+Let $\context$ be a linear context with a linear variable $x$ of type $\tau$ and $e$ be a closed program $\tau$, 
+such that $\context[e/x] \not\reduce$. A transtion from $\context[e/x]$ must be either of 
+the following two forms:
+\begin{itemize}
+\item $\context[e/x] \transto{\alpha} \context'[e/x]$ with $\context \transto{\alpha} \context'$;
+\item $\context \equiv x$ and $\context[e/x] \equiv e \transto{\alpha} e'$.
+\end{itemize}
+\end{lemma}
+%
+\begin{proof}
+Because $\context[e/x] \not\reduce$, it must be in the canonical form, then $\context$ must be one of the forms:
+$x$, $\context_1 \tensor e'$, $e' \tensor \context_1$, $\cpair{context_1, \context_2}$, $\lambda y \ldot \context_1$, 
+where $e'$ is a closed term and $\context_1, \context_2$ are linear contexts with free variable $x$.
+
+It is clear that if $\context \equiv x$, then the transition must be of the second form. 
+In all other forms, it can be easily checked that the transition will be of the first form, with the context 
+$\context$ itself being transformed into another term with (at least) the free variable $x$.
+\end{proof}
+
+\begin{theorem}
+\label{thm:lc-trace}
+Trace pre-order $\preord^T$ is a precongruence with respect to linear contexts, i.e., 
+$e_1 \preord^T e_2$ implies that $\context[e_1 / x] \preord^T \context[e_2 / x]$ for all linear contexts $\context$.
+\end{theorem}
+%
+\begin{proof}
+According to the definition of $\preord^T$, it sufices to show that, for any action sequence $s$, 
+if $\context [e_1 / x] \transto{s}$, then $\context [e_2 / x] \transto{s}$. 
+We prove by induction on the length of $\context[e_1 /x ] \transto{s}$ (note that the 
+transition includes internal transitions, i.e., term reductions). The base case is trivial.
+
+Wo distinguisha two cases.
+\begin{itemize}
+\item $\context[e_1 / x] \reduce M \transto{s}$. By the linear context lemma, the reduction must be 
+  a linear context reduction, which is one of the following cases:
+\begin{itemize}
+\item $M \equiv \context'[e_1 / x]$ where $\context \reduce \context'$: it holds that 
+  $\context[e_2 / x] \reduce \context'[e_2 / x]$. 
+  By induction, $\context'[e_2/x] \transto{s}$ since $\context'[e_1/x] \transto{s}$, 
+  hence $\context[e_2/x] \reduce \context'[e_2/x] \transto{s}$, i.e., $\context[e_2/x] \transto{s}$.
+\item $M \equiv \context[e_1' / x]$ where $e_1 \reduce e_1'$: 
+  we immediately have $e_1' \preord^T e_1 \preord^T e_2$ and by induction, 
+  $\context[e_2 / x] \transto{s}$ because $\context[e_1' / x] \transto{s}$.
+\item $M \equiv \context_y'[e_1' / y]$ where $\context \lintransto{\alpha} \context_y'$ 
+  and $e_1 \transto{\alpha} e_1'$: because $e_1 \preord^T e_2$, $e_2 \transto{\alpha} e_2'$ and 
+  $e_1' \preord^T e_2'$. It is clear that $e_2 \transto{\alpha} e_2'$ must be of the form 
+  $e_2 \reduce^* e_2'' \transto{\alpha} e_2'$, where $e_2'' \not\reduce$. By the definition of 
+  linear context reduction, $\context$ must be an evaluation context, hence 
+  $\context[e_2 / x] \reduce^* \context[e_2'' / x] \reduce \context_y'[e_2' / y]$, 
+  and by induction, $\context_y'[e_1' / y] \transto{s}$ implies $\context_y'[e_2' / y] \transto{s}$. 
+\end{itemize}
+\item $\context[e_1 / x] \transto{\alpha} M \transto{s'}$. By Lemma~\ref{lem:lc-trans}, the first transtion 
+  has two forms:
+\begin{itemize}
+\item $\context \transto{\alpha} \context'$ and $M \equiv \context'[e_1/x]$: 
+\item $\context \equiv x$ and $e_1 \transto{\alpha} e_1' \equiv M$: $e_1 \preord^T e_2$ implies that 
+  $\context[e_2/x] \equiv e_2 \transto{\alpha} \transto{s'}$.
+\end{itemize}
+\end{itemize}
+\end{proof}
+
+\begin{corollary}
+Trace equivalence implies linear contextual equivalence.
+\end{corollary}
+
+We need also discuss the completeness of trace pre-order w.r.t. linear contextual equivalence. 
+
+
+\section{Linear contextual equivalence in the computational $\lambda$-calculus}
+
+In this section we consider the language with extensitons of Moggi's computation types~\cite{Moggi}. 
+The most interesting cases are non-determonistic and probabilistic computations, as the example 
+we have shown in the introduction.
+
+\subsection{Linear PCF with non-determinism}
+
+
+\subsection{Probabilistic linear PCF}
+
+
+
+\section{Applications in cryptography}
+
+This section presents a short proof of the semantic security of EL-Gamal encryption, in CSLR logic~\cite{} 
+extended with the rule saying that probabilistic choice can be moved outside a function in a linear context.
+
+\subsection{ASIAN'06 example (non-linear programs)}
+
+In our paper of ASIAN'2006, there is a logical relation for non-determinism monad which fails 
+capturing some non-trivial contextually equivalent programs. 
+Consider the following two programs:
+\[
+[\lambda x. [0] \choice [1]]
+\qquad 
+[\lambda x. [0]] \choice [\lambda x. [0] \choice [1]]
+\]
+where $\square$ denotes the non-deterministic choice between the two programs to its left and right.
+Both programs can be typed as $\tcomp(\tnat \to \tcomp \tnat)$ in Moggi's computational lambda-calculus.
+
+We conjecture that the two programs are contextually equivalent but did not prove it. 
+The logical relation for non-deterministic monad is defined as 
+\[
+c_1 \;\mathcal{R}_{\tcomp \tau}\; c_2 
+\Leftrightarrow 
+\forall a \in c_1, \exists b \in c_2 \mbox{ s.t. } a \;\mathcal{R}_{\tau}\; b ,
+\mbox{ and } 
+\forall b' \in c_2, \exists a' \in c_1 \mbox{ s.t. } a' \;\mathcal{R}_{\tau}\; b' .
+\]
+This logical relation fails relating the above two programs, because the branch $\lambda x. [0]$ 
+in the second program has no relating candidate in the first program!
+
+%% Note that the following two programs are not contextually equivalent:
+%% \[
+%% [\lambda x. [0] \choice [1]]
+%% \qquad 
+%% [\lambda x. [0]] \choice [\lambda x. [1]] .
+%% \]
+%% The context 
+%% \[
+%% \clet{f}{\_}{} \clet{x}{f(0)}{} \clet{y}{f(1)}{[x+y]}
+%% \]
+%% can distinguish: 
+%% for the first program, the possible results are $0, 1, 2$, while for the second, only $0, 2$.
+
+The two programs are not bisimilar either: while both can take a $\oplus$ transition and become
+\[
+[\lambda x. [0] \choice [1]] \xrightarrow{\choice} \lambda x. [0] \choice [1] 
+\xrightarrow{\;@x\;} [0] \choice [1],
+\qquad 
+[\lambda x. [0]] \choice [\lambda x. [0] \choice [1]] \xrightarrow{\choice} \lambda x. [0]
+\xrightarrow{\;@x\;} [0] ,
+\]
+$[0] \choice [1]$ and $[0]$ are clearly not bisimilar.
+
+The two programs are simulation equivalent.
+
+%% {\bf Conjecture:} Contextual equivalence in the non-deterministic computational lambda-calculus is 
+%% a simulation equivalence. 
+
+%% Proof of $\contpre \subseteq \simul$: Suppose that $e_1 \contpre e_2$, i.e., if $e_1 \reduceto$ 
+%% then $e_2 \reduceto$. We need to show that $\contpre$ is a simulation, i.e., for every action 
+%% $\alpha$, if $e_1 \transto \alpha e_1'$, then there exists $e_2'$ such that 
+%% $e_2 \transto \alpha e_2'$ and $e_1' \contpre e_2'$.
+
+%% \begin{itemize}
+%% \item The case where $\alpha = @e$ (the cases of $\ell$ and $\cproj_i$ are similar): Notice that 
+%% if $e_1 \contpre e_2$, then they must be of the same type, hence both $e_1$ and $e_2$ are of type 
+%% $\tau \to \tau'$ for some $\tau, \tau'$, and $e$ has type $\tau$. According to the transition rules, 
+%% $e_2$ can take the transition $e_2 \transto{@e} e_2 e$. Assume that $\neg (e_1 e \contpre e_2 e)$, 
+%% i.e., there exists some context $\context$ such that $\context\{e_1e/x\} \reduceto$ 
+%% but $\context \{e_2 e/ x\} \diverge$. Then we can construct another context 
+%% $\context' = \context\{xe/ x \}$. Clearly $\context'\{e_i/x\} = \context\{e_ie/x\}$, and it is 
+%% a contradiction to $e_1 \contpre e_2$.
+%% %
+%% \item The case where $\alpha = \oplus$: First, $e_1$ and $e_2$ must have type $\tcomp \tau$ for 
+%% some $\tau$, so if $e_2$ is not a $\reduce$-normal form, it can take several $\reduce$-reductions 
+%% and becomes a normal form $\cval(e_{21}) \choice \cdots \choice \cval(e_{2n})$ (if $\reduce$-reduction 
+%% does not terminate, then it is easy to show that $e_1 \contpre e_2$ when $e_1$ can take 
+%% a $\mredto$-reduction), hence $e_2$ can always take the $\oplus$ transition whenever $e_1$ can.
+
+%% Assume that for every transition $e_2 \transto{\oplus} e_{2i}$, it holds $\neg(e_1' \contpre e_{2i})$.
+%% \end{itemize}
+
+\section{Conclusion}
+
+
+\end{document}
